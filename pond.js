@@ -286,7 +286,7 @@
         if (s) { attach(f, s); frogs.push(f); break; }
       }
     }
-    const nFlies = clamp(round((W * H) / 320000), 2, 5);
+    const nFlies = clamp(round((W * H) / 220000), 3, 7);
     for (let i = 0; i < nFlies; i++) fireflies.push(makeFirefly());
   }
 
