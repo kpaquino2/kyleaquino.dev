@@ -97,6 +97,27 @@
       line-height: 1.65;
       color: var(--soft);
     }
+    /* the one way to reach out: quiet until you look for it */
+    .intro .links { margin-top: 1.5em; font-size: 12px; }
+    .intro a {
+      pointer-events: auto;
+      color: var(--soft);
+      text-decoration: underline;
+      text-decoration-color: var(--muted);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 4px;
+      transition: color 0.25s ease, text-decoration-color 0.25s ease;
+    }
+    .intro a:hover { color: var(--ink); text-decoration-color: var(--ink); }
+    .intro a:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
     .haiku {
       right: max(clamp(22px, 5vw, 72px), env(safe-area-inset-right));
       top: max(clamp(26px, 10vh, 104px), env(safe-area-inset-top));
@@ -225,7 +246,7 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .controls, .controls button, .icon svg { transition: none; }
+      .controls, .controls button, .icon svg, .intro a { transition: none; }
       .intro, .haiku { animation: none; }
     }
   </style>
@@ -236,6 +257,9 @@
   <header class="intro" data-pond-avoid>
     <h1>Kyle Aquino</h1>
     <p>Software Engineer &amp; Platform Lead<br>at Parallel Distribution</p>
+    <p class="links">
+      <a href="https://www.linkedin.com/in/kpaquino/" target="_blank" rel="noopener noreferrer">LinkedIn<span aria-hidden="true"> ↗</span><span class="sr-only"> (opens in a new tab)</span></a>
+    </p>
   </header>
 
   <figure class="haiku" data-pond-avoid>
