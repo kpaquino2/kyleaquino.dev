@@ -1,268 +1,43 @@
 // k-pond — an ASCII pond where frogs hop between lily pads.
-// Everything is drawn into a character grid, then flushed to a canvas one
-// colour-run per row so it stays fast at full-screen sizes.
+//
+// This file runs the pond: lily pads, frogs, ripples, fireflies, input,
+// sound and controls. Drawing is done by one of two renderers that read the
+// same world, so switching between them keeps the scene exactly as it is:
+//   v1 (render-v1.js): the original fine ASCII grid
+//   v2 (render-v2.js): a coarse grid of coloured tiles under glyphs
 (() => {
   'use strict';
 
   const canvas = document.getElementById('pond');
   const ctx = canvas.getContext('2d', { alpha: false });
-  const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const FONT_FAMILY = '"SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace';
+  const { sin, cos, atan2, sqrt, exp, abs, min, max, floor, round, PI, hypot, random } = Math;
+  const { TAU, rand, clamp, lerp, pick, angDiff, padToWorld, renderers } = KPond;
 
-  const { sin, cos, atan2, sqrt, exp, abs, min, max, floor, ceil, round, PI, hypot, random, pow } = Math;
-  const TAU = PI * 2;
-  const LIGHT = -2.3; // light comes from the upper left
-
-  // ---------------------------------------------------------------- helpers
-  const rand = (a = 1, b) => (b === undefined ? random() * a : a + random() * (b - a));
-  const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
-  const lerp = (a, b, t) => a + (b - a) * t;
-  const pick = (arr) => arr[floor(random() * arr.length)];
-  const code = (s) => s.charCodeAt(0);
-  const SPACE = 32;
-
-  function angDiff(a, b) {
-    let d = (b - a) % TAU;
-    if (d > PI) d -= TAU;
-    else if (d < -PI) d += TAU;
-    return d;
-  }
-
-  // value noise
-  const perm = new Uint8Array(512);
-  {
-    const p = [...Array(256).keys()];
-    for (let i = 255; i > 0; i--) {
-      const j = floor(random() * (i + 1));
-      [p[i], p[j]] = [p[j], p[i]];
-    }
-    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
-  }
-  function vnoise(x, y) {
-    const ix = floor(x), iy = floor(y);
-    const fx = x - ix, fy = y - iy;
-    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-    const X = ix & 255, Y = iy & 255;
-    const a = perm[X + perm[Y]], b = perm[X + 1 + perm[Y]];
-    const c = perm[X + perm[Y + 1]], d = perm[X + 1 + perm[Y + 1]];
-    return (a + (b - a) * sx + (c - a + (a - b - c + d) * sx) * sy) / 255;
-  }
-
-  // ---------------------------------------------------------------- palette
-  // Every colour is authored for the night pond. The day pond gets a mirror
-  // image: same hue, lightness flipped around the background, so whatever
-  // glowed brightly at night becomes the darkest ink by day. A few colours
-  // pass an explicit day value instead.
-  const BG = { dark: '#05141a', light: '#eef3ec' };
-  const palette = [], paletteLight = [];
-  const palMap = new Map();
-  function pc(hex, dayHex) {
-    const key = dayHex ? hex + '|' + dayHex : hex;
-    let i = palMap.get(key);
-    if (i === undefined) {
-      i = palette.length;
-      palette.push(hex);
-      paletteLight.push(dayHex || toDay(hex));
-      palMap.set(key, i);
-    }
-    return i;
-  }
-  function rgb(h) {
-    const n = parseInt(h.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-  function toDay(hex) {
-    const [r, g, b] = rgb(hex).map((v) => v / 255);
-    const mx = max(r, g, b), mn = min(r, g, b);
-    const l = (mx + mn) / 2;
-    let h = 0, s = 0;
-    if (mx !== mn) {
-      const d = mx - mn;
-      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
-      h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-      h /= 6;
-    }
-    const L = clamp(0.93 - (l - 0.07) * 0.95, 0.12, 0.9);
-    const Sa = min(1, s * 1.1);
-    const q = L < 0.5 ? L * (1 + Sa) : L + Sa - L * Sa, p = 2 * L - q;
-    const hue = (t) => {
-      t = (t + 1) % 1;
-      if (t < 1 / 6) return p + (q - p) * 6 * t;
-      if (t < 1 / 2) return q;
-      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-      return p;
-    };
-    return '#' + [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)].map((v) => round(v * 255).toString(16).padStart(2, '0')).join('');
-  }
-  let theme = 'dark';
-  let activePal = palette;
-  function mix(a, b, t) {
-    const A = rgb(a), B = rgb(b);
-    return '#' + A.map((v, i) => round(lerp(v, B[i], t)).toString(16).padStart(2, '0')).join('');
-  }
-  function ramp(stops, n) {
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      const t = n === 1 ? 0 : (i / (n - 1)) * (stops.length - 1);
-      const k = min(stops.length - 2, floor(t));
-      out.push(pc(mix(stops[k], stops[k + 1], t - k)));
-    }
-    return out;
-  }
-
-  const WATER = ramp(['#0e3340', '#1b5a6a', '#3d97a6'], 5);
-  const WATER_CH = ['.', '-', '~', '~', '~'].map(code);
-  const DEEP = pc('#123540');
-  const RIPPLE = ramp(['#245f6e', '#7fd0dc', '#e2fbff'], 6);
-  const SHADOW = pc('#0b2119', '#71897d');
-  const SPLASH = ramp(['#4ea3b4', '#e8fcff'], 4);
-  const TONGUE = pc('#ff7aa2');
-  const TONGUE_TIP = pc('#ff4f86');
-  const GLOW = ramp(['#1c3122', '#8f8a3c', '#f6f0a0'], 5);
-  const FIREFLY = pc('#fffbd0', '#3d3a2c');
-  const LINE = ['-', '\\', '|', '/'].map(code);
-  const FILL_CH = ['.', ':', '-', '=', '+', '*'].map(code);
-  const BODY_CH = ['o', '%', '#', '@'].map(code);
-  const EYE_CH = code('O');
-  const SAC_CH = code('o');
-
-  // [night, day] pairs: flipping a pale lily would turn it black, so these are hand-picked
-  const FLOWER_SCHEMES = [
-    { outer: [['#f6c7da', '#e58fb3'], ['#f49ac0', '#d4648f'], ['#e3709f', '#b8436f']], inner: ['#ffe3ee', '#f0a9c6'], center: ['#ffd84a', '#d99a0b'] },
-    { outer: [['#ffffff', '#9fb2bd'], ['#e9eef0', '#b5c4cc'], ['#c9d6dc', '#8197a3']], inner: ['#fff8e6', '#c9b98f'], center: ['#ffcf3a', '#d38f06'] },
-    { outer: [['#ffb6d0', '#e07aa3'], ['#f08ab2', '#c94f80'], ['#d9578d', '#a32e5c']], inner: ['#ffd6e5', '#ea9bbb'], center: ['#ffe066', '#d6a10e'] },
-    { outer: [['#fff3c4', '#d9bf55'], ['#f3e7a0', '#c4a838'], ['#d9c66a', '#a68a1f']], inner: ['#fffbe6', '#e3cf7a'], center: ['#ffb02e', '#c96f05'] },
-  ].map((s) => ({ outer: s.outer.map((c) => pc(...c)), inner: pc(...s.inner), center: pc(...s.center) }));
-
-  // `day` holds hand-picked daylight colours: flipped night colours leave frogs
-  // looking washed out, and by day they should read as solid ink.
+  // Frog kinds, shared by both renderers (which colour them by index):
+  // green, brown, red-eyed tree frog, gold.
   const FROG_KINDS = [
-    {
-      weight: 5, scale: 1,
-      body: ['#1f4f25', '#2f7a31', '#4fa83e', '#8ad655'], spot: '#173a1b', leg: '#3b8a35', eye: '#f5d74a', sac: '#e8e2b0', stripe: '#c4ea7f', wet: '#1f4c40',
-      day: { body: ['#6aa84a', '#4a9134', '#367a26', '#25601a'], spot: '#173d12', leg: '#4f8f36', eye: '#c79a00', sac: '#b8a65e', stripe: '#8fbf3f' },
-    },
-    {
-      weight: 2, scale: 1.08,
-      body: ['#4a3a1c', '#7a6230', '#a88a4a', '#d8be7c'], spot: '#2e230f', leg: '#8a7038', eye: '#f0b84a', sac: '#efe2c0', stripe: '#e8d7a0', wet: '#2e4038',
-      day: { body: ['#a8874a', '#8c6a30', '#6e5020', '#523a14'], spot: '#33230a', leg: '#8a6a34', eye: '#c27c00', sac: '#bfa978', stripe: '#c9a85e' },
-    },
-    {
-      weight: 2, scale: 0.88,
-      body: ['#1d6b2a', '#2fa23a', '#5fd34a', '#b8f77f'], spot: null, leg: '#3fbf45', eye: '#ff5a36', sac: '#fff0c8', stripe: null, wet: '#225846',
-      day: { body: ['#4fbf3c', '#2fa42c', '#1f8a24', '#146e1c'], leg: '#2b9a2e', eye: '#e0401f', sac: '#c7b36f' },
-    },
-    {
-      weight: 1, scale: 0.95,
-      body: ['#6b4a0c', '#b07d16', '#e3ac2e', '#ffe08a'], spot: '#4a3005', leg: '#c99022', eye: '#fff4d6', sac: '#fff4d6', stripe: null, wet: '#3a4a34',
-      day: { body: ['#d9a21e', '#c18610', '#a06a08', '#7d5004'], spot: '#4a2e02', leg: '#b8860f', eye: '#2a1c00', sac: '#c9a24a' },
-    },
-  ].map((k) => {
-    const d = k.day;
-    return {
-      weight: k.weight,
-      scale: k.scale,
-      hasSpots: !!k.spot,
-      canStripe: !!k.stripe,
-      dry: {
-        body: k.body.map((c, i) => pc(c, d.body[i])),
-        spot: k.spot ? pc(k.spot, d.spot) : pc(k.body[0], d.body[0]),
-        leg: pc(k.leg, d.leg),
-        eye: pc(k.eye, d.eye),
-        sac: pc(k.sac, d.sac),
-        stripe: k.stripe ? pc(k.stripe, d.stripe) : pc(k.body[3], d.body[3]),
-      },
-      wet: {
-        body: ramp([k.wet, mix(k.wet, '#7fb0a0', 0.35)], 4),
-        spot: pc(k.wet),
-        leg: pc(mix(k.wet, '#000000', 0.15)),
-        eye: pc(k.eye, d.eye),
-        sac: pc(k.sac, d.sac),
-        stripe: pc(k.wet),
-      },
-    };
-  });
+    { weight: 5, scale: 1, spots: true, stripe: true },
+    { weight: 2, scale: 1.08, spots: true, stripe: true },
+    { weight: 2, scale: 0.88, spots: false, stripe: false },
+    { weight: 1, scale: 0.95, spots: true, stripe: false },
+  ];
 
-  // ---------------------------------------------------------------- grid
-  let W = 0, H = 0, dpr = 1, fontSize = 10, font = '', cellW = 6, cellH = 12, yOff = 0;
-  let cols = 0, rows = 0;
-  let chars = new Uint16Array(0), colors = new Uint16Array(0);
-  let lines = [], lineMin = [], lineMax = [];
-  let S = 1, FR = 40, JMAX = 330;
+  let W = 0, H = 0, dpr = 1;
+  let S = 1, FR = 52, JMAX = 330;
+  let style = 'v2'; // which renderer is drawing: 'v1' or 'v2'
+  // wakes live in v2's grid; it keeps them fading even while v1 is showing
+  const wake = (x, y, amt, radius) => renderers.v2.deposit(x, y, amt, radius);
 
-  function set(i, ch, k) {
-    chars[i] = ch;
-    colors[i] = k;
-  }
-  function cellAt(x, y) {
-    const c = floor(x / cellW), r = floor(y / cellH);
-    if (c < 0 || r < 0 || c >= cols || r >= rows) return -1;
-    return r * cols + c;
-  }
-  // pick a line glyph for a direction vector, accounting for the tall cells
-  function lineCodeV(x, y) {
-    let b = atan2(y / cellH, x / cellW);
-    if (b < 0) b += PI;
-    return LINE[round(b / (PI / 4)) & 3];
-  }
-  const lineCode = (a) => lineCodeV(cos(a), sin(a));
-  // half the cell extent along a unit normal: the thinnest a line can be and still hit every cell
-  const cellHalf = (nx, ny) => 0.5 * sqrt(nx * nx * cellW * cellW + ny * ny * cellH * cellH);
-
-  function flush() {
-    ctx.fillStyle = BG[theme];
-    ctx.fillRect(0, 0, W, H);
-    ctx.font = font;
-    ctx.textBaseline = 'top';
-    const used = [];
-    for (let r = 0; r < rows; r++) {
-      const base = r * cols;
-      used.length = 0;
-      for (let c = 0; c < cols; c++) {
-        const ch = chars[base + c];
-        if (ch === SPACE) continue;
-        const k = colors[base + c];
-        let L = lines[k];
-        if (!L) {
-          L = lines[k] = new Uint16Array(cols).fill(SPACE);
-          lineMin[k] = -1;
-        }
-        if (lineMin[k] < 0) {
-          lineMin[k] = c;
-          used.push(k);
-        }
-        lineMax[k] = c;
-        L[c] = ch;
-      }
-      const y = r * cellH + yOff;
-      for (let u = 0; u < used.length; u++) {
-        const k = used[u];
-        const L = lines[k], a = lineMin[k], b = lineMax[k] + 1;
-        ctx.fillStyle = activePal[k];
-        ctx.fillText(String.fromCharCode.apply(null, L.subarray(a, b)), a * cellW, y);
-        L.fill(SPACE, a, b);
-        lineMin[k] = -1;
-      }
-    }
-  }
 
   // ---------------------------------------------------------------- scene
   let pads = [], frogs = [], ripples = [], fireflies = [], drops = [];
-  let time = 0, ambientT = 2;
+  let time = 0, ambientT = 2, frogId = 0;
 
-  function padToWorld(p, lx, ly) {
-    const c = cos(p.rot), s = sin(p.rot);
-    return { x: p.x + lx * c - ly * s, y: p.y + lx * s + ly * c };
-  }
   function targetWorld(tg) {
     return tg.pad ? padToWorld(tg.pad, tg.lx, tg.ly) : tg;
   }
 
   function makePad(x, y, r) {
-    const dark = mix('#123a20', '#2b3f17', random());
-    const mid = mix('#2f7a3a', '#4f8a2c', random());
-    const light = mix('#6dbb55', '#a6cf63', random());
-    const reddish = random() < 0.3;
     const p = {
       x, y, r,
       rot: rand(TAU),
@@ -273,15 +48,12 @@
       notchW: rand(0.12, 0.2),
       veins: 6 + floor(rand(4)),
       seed: rand(200),
+      pv: random(),
+      red: random() < 0.3,
       scale: 1,
       bounce: 0,
       bounceT: 0,
       landable: r >= FR * 1.5,
-      fill: ramp([mix(dark, '#000000', 0.25), dark, mid, mix(mid, light, 0.45)], 6),
-      rim: reddish
-        ? ramp(['#4a1f2a', '#8a3a3f', '#c0675a', '#e09a7a'], 4)
-        : ramp([mix(dark, '#000000', 0.1), mid, light, mix(light, '#e8ffb0', 0.4)], 4),
-      vein: pc(mix(mid, light, 0.55)),
       flower: null,
     };
     if (r > 48 * S && random() < 0.28) {
@@ -290,10 +62,10 @@
       p.flower = {
         lx: cos(a) * d,
         ly: sin(a) * d,
-        fs: max(r * rand(0.26, 0.36), cellH * 1.4),
+        fs: max(r * rand(0.28, 0.38), 20 * S),
         n: pick([8, 10, 12]),
         spin: rand(TAU),
-        scheme: pick(FLOWER_SCHEMES),
+        scheme: floor(rand(4)),
       };
     }
     return p;
@@ -307,14 +79,16 @@
       if ((roll -= k.weight) <= 0) { kind = k; break; }
     }
     const spots = [];
-    if (kind.hasSpots) {
-      for (let n = 3 + floor(rand(4)); n > 0; n--) spots.push({ u: rand(-0.8, 0.35), v: rand(-0.38, 0.38), r: rand(0.09, 0.16) });
+    if (kind.spots) {
+      for (let n = 3 + floor(rand(4)); n > 0; n--) spots.push({ u: rand(-0.8, 0.35), v: rand(-0.38, 0.38), r: rand(0.1, 0.17) });
     }
     return {
+      id: frogId++,
       kind,
+      kindIndex: FROG_KINDS.indexOf(kind),
       size: FR * rand(0.88, 1.08) * kind.scale,
       spots,
-      stripe: kind.canStripe && random() < 0.5,
+      stripe: kind.stripe && random() < 0.5,
       pitch: rand(0.8, 1.25),
       x: 0, y: 0, h: 0,
       heading: rand(TAU), lh: 0,
@@ -419,7 +193,7 @@
       speed: o.speed ?? 50 * S,
       amp: o.amp ?? 1,
       decay: o.decay ?? 1.1,
-      gap: o.gap ?? 14 * S,
+      gap: o.gap, // each renderer picks a default that suits its grid
       R: 0, A: 0,
     });
     if (ripples.length > 70) ripples.shift();
@@ -431,7 +205,7 @@
       drops.push({ x, y, z: 0, vx: cos(a) * sp, vy: sin(a) * sp * 0.7, vz: rand(90, 210) * S, life: 0 });
     }
     addRipple(x, y, { amp: 1.3, speed: 70 * S, decay: 0.95 });
-    addRipple(x, y, { amp: 0.9, speed: 42 * S, decay: 1.2, r0: 0 });
+    wake(x, y, 0.9, 1);
   }
 
   function makeFirefly() {
@@ -453,7 +227,7 @@
 
   function buildScene() {
     pads = []; frogs = []; ripples = []; fireflies = []; drops = [];
-    const rMin = 34 * S, rMax = 112 * S;
+    const rMin = 34 * S, rMax = 118 * S;
     const target = W * H * 0.34;
     let covered = 0;
     for (let n = 0; n < 1600 && covered < target; n++) {
@@ -489,21 +263,11 @@
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const area = sqrt(W * H);
-    fontSize = clamp(round(area / 105), 8, 13);
-    font = `${fontSize}px ${FONT_FAMILY}`;
-    ctx.font = font;
-    cellW = ctx.measureText('M').width || fontSize * 0.6;
-    cellH = round(fontSize * 1.15 * 10) / 10;
-    yOff = (cellH - fontSize) / 2;
-    cols = ceil(W / cellW);
-    rows = ceil(H / cellH);
-    chars = new Uint16Array(cols * rows);
-    colors = new Uint16Array(cols * rows);
-    lines = []; lineMin = []; lineMax = [];
+    renderers.v1.resize(ctx, W, H);
+    renderers.v2.resize(ctx, W, H);
 
-    S = clamp(area / 1100, 0.6, 1.5);
-    FR = 46 * S;
+    S = clamp(sqrt(W * H) / 1100, 0.6, 1.5);
+    FR = 52 * S;
     JMAX = 330 * S;
     buildScene();
   }
@@ -643,6 +407,7 @@
     if (f.inWater) {
       f.inWater = false;
       addRipple(f.x, f.y, { amp: 0.9, speed: 45 * S });
+      wake(f.x, f.y, 0.6, 1);
     }
     f.state = 'jump';
     f.stateT = 0;
@@ -802,10 +567,11 @@
         f.x += cos(f.heading) * sp * dt;
         f.y += sin(f.heading) * sp * dt;
         f.ext = 0.45 + 0.45 * sin(time * 8 + f.pitch * 10);
+        wake(f.x - cos(f.heading) * f.size * 0.7, f.y - sin(f.heading) * f.size * 0.7, 0.06);
         f.rippleT -= dt;
         if (f.rippleT <= 0) {
-          f.rippleT = 0.4;
-          addRipple(f.x - cos(f.heading) * f.size * 0.6, f.y - sin(f.heading) * f.size * 0.6, { amp: 0.55, speed: 26 * S, decay: 1.7, r0: 4 });
+          f.rippleT = 0.5;
+          addRipple(f.x - cos(f.heading) * f.size * 0.6, f.y - sin(f.heading) * f.size * 0.6, { amp: 0.5, speed: 26 * S, decay: 1.7, r0: 4 });
         }
         if (hypot(p.x - f.x, p.y - f.y) < p.r + f.size * 0.2) {
           const s = findSpot(p, f);
@@ -898,6 +664,7 @@
       d.z += d.vz * dt;
       if (d.z < 0) {
         if (random() < 0.3) addRipple(d.x, d.y, { amp: 0.45, speed: 20 * S, decay: 2, r0: 1 });
+        wake(d.x, d.y, 0.25);
         drops.splice(i, 1);
       }
     }
@@ -909,6 +676,7 @@
     for (const f of frogs) updateFrog(f, dt);
     updateFireflies(dt);
     updateDrops(dt);
+    renderers.v2.diffuse(dt);
 
     // water striders & falling seeds: the odd ripple on open water
     ambientT -= dt;
@@ -928,339 +696,6 @@
     }
   }
 
-  // ---------------------------------------------------------------- drawing
-  function drawWater() {
-    const tw = REDUCED ? time * 0.25 : time;
-    for (const r of ripples) {
-      const age = time - r.t0;
-      r.R = r.r0 + r.speed * age;
-      r.A = r.amp * exp(-age * r.decay);
-    }
-    const nR = ripples.length;
-    let i = 0;
-    for (let row = 0; row < rows; row++) {
-      const y = (row + 0.5) * cellH;
-      const sy1 = sin(y * 0.021 + tw * 0.3) * 1.6;
-      for (let c = 0; c < cols; c++, i++) {
-        const x = (c + 0.5) * cellW;
-        let w = sin(x * 0.009 + tw * 0.45 + sy1) + sin(y * 0.016 - tw * 0.38 + sin(x * 0.013 - tw * 0.22) * 1.3);
-        w = (w * 0.25 + 0.5) * 0.65 + vnoise(x * 0.012 + tw * 0.08, y * 0.02 - tw * 0.05) * 0.35;
-
-        let best = 0, bx = 0, by = 0;
-        for (let k = 0; k < nR; k++) {
-          const q = ripples[k];
-          const dx = x - q.x, dy = y - q.y;
-          const d = sqrt(dx * dx + dy * dy) || 1;
-          const dd = d - q.R;
-          const band = cellHalf(dx / d, dy / d) * 1.05;
-          if (dd > band * 2.5 || dd < -(q.gap + band * 2.5)) continue;
-          const g1 = dd / band, g2 = (dd + q.gap) / band;
-          const g = (exp(-g1 * g1) + 0.5 * exp(-g2 * g2)) * q.A;
-          if (g > best) { best = g; bx = dx; by = dy; }
-        }
-        if (best > 0.3) {
-          set(i, lineCodeV(-by, bx), RIPPLE[min(5, floor(best * 4.5))]);
-          continue;
-        }
-        w += best * 0.6;
-        if (w > 0.62) {
-          const k = min(4, floor(((w - 0.62) / 0.38) * 5));
-          set(i, WATER_CH[k], WATER[k]);
-        } else {
-          const hsh = perm[(c & 255) + perm[row & 255]];
-          if (hsh < 5 && sin(time * 0.7 + hsh * 1.7) > -0.3) set(i, 46, DEEP);
-          else chars[i] = SPACE;
-        }
-      }
-    }
-  }
-
-  function drawPad(p) {
-    const R = p.r * p.scale;
-    const c0 = max(0, floor((p.x - R) / cellW)), c1 = min(cols - 1, floor((p.x + R) / cellW));
-    const r0 = max(0, floor((p.y - R) / cellH)), r1 = min(rows - 1, floor((p.y + R) / cellH));
-    if (c0 > c1 || r0 > r1) return;
-    const notchA = p.rot + p.notch;
-    const veinStep = TAU / p.veins;
-    const cr = cos(-p.rot), sr = sin(-p.rot);
-    for (let r = r0; r <= r1; r++) {
-      const y = (r + 0.5) * cellH, dy = y - p.y;
-      for (let c = c0; c <= c1; c++) {
-        const x = (c + 0.5) * cellW, dx = x - p.x;
-        const d2 = dx * dx + dy * dy;
-        if (d2 > R * R) continue;
-        const d = sqrt(d2) || 0.001;
-        const ca = dx / d, sa = dy / d;
-        const a = atan2(dy, dx);
-        const la = angDiff(notchA, a);
-        const al = abs(la);
-        const t = d / R;
-        const i = r * cols + c;
-        if (t > 0.07) {
-          if (al < p.notchW) continue; // the notch: open water
-          if ((al - p.notchW) * d < cellHalf(-sa, ca)) {
-            set(i, lineCodeV(ca, sa), p.rim[2]);
-            continue;
-          }
-        }
-        if (d > R - cellHalf(ca, sa) * 1.9) {
-          const lit = 0.5 + 0.5 * cos(a - LIGHT);
-          set(i, lineCodeV(-sa, ca), p.rim[min(3, floor(lit * 4))]);
-          continue;
-        }
-        if (t > 0.14 && t < 0.86) {
-          const va = la / veinStep;
-          if (abs(va - round(va)) * veinStep * d < cellHalf(-sa, ca) * 0.85) {
-            set(i, lineCodeV(ca, sa), p.vein);
-            continue;
-          }
-        }
-        const lx = dx * cr - dy * sr, ly = dx * sr + dy * cr;
-        const n = vnoise(lx * 0.05 + p.seed, ly * 0.05);
-        const L = clamp(0.55 + 0.25 * n - 0.25 * t * t + 0.18 * cos(a - LIGHT) * t, 0, 0.999);
-        const k = floor(L * FILL_CH.length);
-        set(i, FILL_CH[k], p.fill[k]);
-      }
-    }
-    if (p.flower) drawFlower(p);
-  }
-
-  function drawFlower(p) {
-    const fl = p.flower;
-    const w = padToWorld(p, fl.lx, fl.ly);
-    const fs = fl.fs * p.scale;
-    const rot = p.rot + fl.spin;
-    const sc = fl.scheme;
-    const c0 = max(0, floor((w.x - fs) / cellW)), c1 = min(cols - 1, floor((w.x + fs) / cellW));
-    const r0 = max(0, floor((w.y - fs) / cellH)), r1 = min(rows - 1, floor((w.y + fs) / cellH));
-    for (let r = r0; r <= r1; r++) {
-      const dy = (r + 0.5) * cellH - w.y;
-      for (let c = c0; c <= c1; c++) {
-        const dx = (c + 0.5) * cellW - w.x;
-        const d = sqrt(dx * dx + dy * dy);
-        if (d > fs) continue;
-        const phi = atan2(dy, dx) - rot;
-        const rOut = fs * (0.5 + 0.5 * pow(abs(cos((phi * fl.n) / 2)), 0.6));
-        const rIn = fs * 0.62 * (0.5 + 0.5 * pow(abs(cos(((phi + PI / fl.n) * fl.n) / 2)), 0.6));
-        const i = r * cols + c;
-        if (d < fs * 0.2) set(i, 64, sc.center);
-        else if (d < rIn) set(i, lineCodeV(dx, dy), sc.inner);
-        else if (d < rOut) set(i, lineCodeV(dx, dy), sc.outer[min(2, floor((d / rOut) * 3))]);
-      }
-    }
-    const ci = cellAt(w.x, w.y);
-    if (ci >= 0) set(ci, 64, sc.center);
-  }
-
-  function drawShadow(f) {
-    if (f.h < 1) return;
-    const sc = f.size * (1 - f.h / (400 * S)) * 0.9;
-    const sx = f.x + f.h * 0.12, sy = f.y + f.h * 0.18;
-    const hc = cos(f.heading), hs = sin(f.heading);
-    const Rb = sc * 1.1;
-    const c0 = max(0, floor((sx - Rb) / cellW)), c1 = min(cols - 1, floor((sx + Rb) / cellW));
-    const r0 = max(0, floor((sy - Rb) / cellH)), r1 = min(rows - 1, floor((sy + Rb) / cellH));
-    for (let r = r0; r <= r1; r++) {
-      const dy = (r + 0.5) * cellH - sy;
-      for (let c = c0; c <= c1; c++) {
-        const dx = (c + 0.5) * cellW - sx;
-        const u = (dx * hc + dy * hs) / (sc * 1.0);
-        const v = (-dx * hs + dy * hc) / (sc * 0.62);
-        if (u * u + v * v < 1) set(r * cols + c, 46, SHADOW);
-      }
-    }
-  }
-
-  function segDist(px, py, ax, ay, bx, by) {
-    const vx = bx - ax, vy = by - ay;
-    const t = clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1);
-    const qx = ax + vx * t - px, qy = ay + vy * t - py;
-    return sqrt(qx * qx + qy * qy);
-  }
-
-  function drawFrog(f) {
-    const sc = f.size * (1 + (f.h / (160 * S)) * 0.55) * f.squash;
-    const fx = f.x, fy = f.y - f.h * 0.35;
-    const hc = cos(f.heading), hs = sin(f.heading);
-    const pal = f.inWater ? f.kind.wet : f.kind.dry;
-    const e = f.ext;
-
-    // leg joints in frog space (u forward, v to the side; mirrored for the other side)
-    const segs = [
-      [-0.5, 0.36, lerp(0.02, -1.2, e), lerp(0.8, 0.62, e), 0.19],
-      [lerp(0.02, -1.2, e), lerp(0.8, 0.62, e), lerp(-0.42, -2.0, e), lerp(0.98, 0.48, e), 0.12],
-      [0.36, 0.34, lerp(0.66, 1.08, e), lerp(0.7, 0.55, e), 0.1],
-    ];
-    const footU = segs[1][2], footV = segs[1][3];
-    // per side: thickness (never thinner than a cell) and glyph
-    const legT = [], legCh = [];
-    for (const s of segs) {
-      const lu = s[2] - s[0], lv = s[3] - s[1];
-      for (const side of [1, -1]) {
-        const wa = f.heading + atan2(lv * side, lu);
-        legT.push(max(s[4], cellHalf(-sin(wa), cos(wa)) / sc));
-        legCh.push(lineCode(wa));
-      }
-    }
-
-    const eyes = [];
-    for (const side of [1, -1]) {
-      const u = 0.6, v = 0.34 * side;
-      eyes.push(fx + (u * hc - v * hs) * sc, fy + (u * hs + v * hc) * sc);
-    }
-    const er = 0.17 * sc;
-    const erx = max(er, cellW * 0.55), ery = max(er, cellH * 0.55);
-    const sacR = 0.42 * f.croak;
-    const lu = cos(LIGHT - f.heading), lv = sin(LIGHT - f.heading);
-    const stripeHalf = max(0.06, (cellW * 0.5) / sc);
-    const stripeCh = lineCode(f.heading);
-    const footR = max(0.16, (cellW * 0.5) / sc);
-
-    const Rb = 2.25 * sc;
-    const c0 = max(0, floor((fx - Rb) / cellW)), c1 = min(cols - 1, floor((fx + Rb) / cellW));
-    const r0 = max(0, floor((fy - Rb) / cellH)), r1 = min(rows - 1, floor((fy + Rb) / cellH));
-    for (let r = r0; r <= r1; r++) {
-      const py = (r + 0.5) * cellH, dy = py - fy;
-      for (let c = c0; c <= c1; c++) {
-        const px = (c + 0.5) * cellW, dx = px - fx;
-        if (dx * dx + dy * dy > Rb * Rb) continue;
-        const i = r * cols + c;
-
-        // eyes (in screen space so they always land on at least one cell)
-        let qx = (px - eyes[0]) / erx, qy = (py - eyes[1]) / ery;
-        let eyeHit = qx * qx + qy * qy < 1;
-        if (!eyeHit) {
-          qx = (px - eyes[2]) / erx;
-          qy = (py - eyes[3]) / ery;
-          eyeHit = qx * qx + qy * qy < 1;
-        }
-        if (eyeHit) {
-          set(i, EYE_CH, pal.eye);
-          continue;
-        }
-
-        const u = (dx * hc + dy * hs) / sc, v = (-dx * hs + dy * hc) / sc, av = abs(v);
-
-        // body + head
-        const bu = (u + 0.15) / 0.8, bv = v / 0.58;
-        const hu = (u - 0.5) / 0.45, hv = v / 0.48;
-        const q = min(bu * bu + bv * bv, hu * hu + hv * hv);
-        if (q < 1) {
-          if (f.stripe && av < stripeHalf && u > -0.85 && u < 0.6) {
-            set(i, stripeCh, pal.stripe);
-            continue;
-          }
-          let spot = false;
-          for (const s of f.spots) {
-            const su = u - s.u, sv = v - s.v;
-            if (su * su + sv * sv < s.r * s.r) { spot = true; break; }
-          }
-          const lit = clamp(0.15 + (1 - q) * 0.85 + 0.2 * ((u + 0.15) * lu + v * lv), 0, 0.999);
-          const k = floor(lit * 4);
-          set(i, BODY_CH[k], spot ? pal.spot : pal.body[k]);
-          continue;
-        }
-
-        // vocal sac, puffing out under the chin
-        if (sacR > 0.05) {
-          const su = u - 0.86;
-          if (su * su + v * v < sacR * sacR) {
-            set(i, SAC_CH, pal.sac);
-            continue;
-          }
-        }
-
-        // legs
-        const side = v < 0 ? 1 : 0;
-        let legHit = -1;
-        if (hypot(u - footU, av - footV) < footR) legHit = 99;
-        else {
-          for (let s = 0; s < 3; s++) {
-            const g = segs[s];
-            if (segDist(u, av, g[0], g[1], g[2], g[3]) < legT[s * 2 + side]) { legHit = s; break; }
-          }
-        }
-        if (legHit === 99) {
-          set(i, 42, pal.leg);
-          continue;
-        }
-        if (legHit >= 0) {
-          set(i, legCh[legHit * 2 + side], pal.leg);
-          continue;
-        }
-
-        // a thin moat of darkness so frogs read against busy pads
-        if (!f.inWater && q < 1.5) chars[i] = SPACE;
-      }
-    }
-
-    if (f.tongue) {
-      const tg = f.tongue;
-      const reach = tg.t < 0.5 ? tg.t * 2 : (1 - tg.t) * 2;
-      const mx = fx + hc * 0.92 * sc, my = fy + hs * 0.92 * sc;
-      const tx = lerp(mx, tg.x, reach), ty = lerp(my, tg.y, reach);
-      const len = hypot(tx - mx, ty - my);
-      const n = ceil(len / (min(cellW, cellH) * 0.5));
-      const ch = lineCodeV(tx - mx, ty - my);
-      for (let k = 1; k <= n; k++) {
-        const ci = cellAt(lerp(mx, tx, k / n), lerp(my, ty, k / n));
-        if (ci >= 0) set(ci, ch, TONGUE);
-      }
-      const ti = cellAt(tx, ty);
-      if (ti >= 0) {
-        if (tg.caught) set(ti, 42, FIREFLY);
-        else set(ti, SAC_CH, TONGUE_TIP);
-      }
-    }
-  }
-
-  function drawFireflies() {
-    for (const fl of fireflies) {
-      if (!fl.alive || fl.fade < 0.02) continue;
-      if (theme === 'light') {
-        // by day they're just flies: no glow, wings buzzing
-        const ci = cellAt(fl.x, fl.y);
-        if (ci >= 0 && fl.fade > 0.3) set(ci, sin(time * 40 + fl.phase) > 0 ? 120 : 43, FIREFLY);
-        continue;
-      }
-      const pulse = 0.5 + 0.5 * sin(time * fl.freq + fl.phase);
-      const b = fl.fade * (0.4 + 0.6 * pulse * pulse);
-      const gx = cellW * (1.2 + 2.6 * b), gy = cellH * (0.7 + 1.4 * b);
-      const c0 = max(0, floor((fl.x - gx) / cellW)), c1 = min(cols - 1, floor((fl.x + gx) / cellW));
-      const r0 = max(0, floor((fl.y - gy) / cellH)), r1 = min(rows - 1, floor((fl.y + gy) / cellH));
-      for (let r = r0; r <= r1; r++) {
-        const qy = ((r + 0.5) * cellH - fl.y) / gy;
-        for (let c = c0; c <= c1; c++) {
-          const qx = ((c + 0.5) * cellW - fl.x) / gx;
-          const q = qx * qx + qy * qy;
-          const i = r * cols + c;
-          if (q > 1 || chars[i] !== SPACE) continue;
-          set(i, 46, GLOW[min(4, floor((1 - q) * b * 4.99))]);
-        }
-      }
-      const ci = cellAt(fl.x, fl.y);
-      if (ci >= 0) set(ci, b > 0.6 ? 42 : 43, b > 0.6 ? FIREFLY : GLOW[4]);
-    }
-  }
-
-  function drawDrops() {
-    for (const d of drops) {
-      const ci = cellAt(d.x, d.y - d.z * 0.4);
-      if (ci < 0) continue;
-      set(ci, d.vz > 0 ? 39 : 46, SPLASH[clamp(3 - floor(d.life * 4), 0, 3)]);
-    }
-  }
-
-  function render() {
-    drawWater();
-    for (const p of pads) drawPad(p);
-    for (const f of frogs) drawShadow(f);
-    const order = frogs.slice().sort((a, b) => (a.inWater ? -1 : a.h) - (b.inWater ? -1 : b.h));
-    for (const f of order) drawFrog(f);
-    drawFireflies();
-    drawDrops();
-    flush();
-  }
 
   // ---------------------------------------------------------------- input
   function padAt(x, y) {
@@ -1306,6 +741,7 @@
       return;
     }
     addRipple(x, y, { amp: 1.1, speed: 60 * S, decay: 1.0 });
+    wake(x, y, 0.5);
     sfx.plop(x, 0.8, 0.12);
     for (const o of frogs) {
       if (canJump(o) && hypot(o.x - x, o.y - y) < 190 * S) {
@@ -1332,9 +768,12 @@
   });
   canvas.addEventListener('pointermove', (e) => {
     const x = e.clientX, y = e.clientY;
-    if (dragging && time - lastDrag > 0.07 && !padAt(x, y)) {
-      addRipple(x, y, { amp: 0.7, speed: 40 * S, decay: 1.6, r0: 1 });
-      lastDrag = time;
+    if (dragging && !padAt(x, y)) {
+      wake(x, y, 0.18);
+      if (time - lastDrag > 0.09) {
+        addRipple(x, y, { amp: 0.7, speed: 40 * S, decay: 1.6, r0: 1 });
+        lastDrag = time;
+      }
     }
     canvas.style.cursor = frogAt(x, y) || padAt(x, y) ? 'pointer' : 'default';
   });
@@ -1348,17 +787,16 @@
       leapAll();
     }
   });
-  document.getElementById('leap').addEventListener('click', leapAll);
 
   const soundBtn = document.getElementById('sound');
   soundBtn.addEventListener('click', () => {
     sfx.on = !sfx.on;
     if (sfx.on) sfx.init();
-    soundBtn.textContent = sfx.on ? 'sound on' : 'sound off';
     soundBtn.setAttribute('aria-pressed', String(sfx.on));
   });
 
   // theme: follow the system until the viewer picks one, then remember it
+  let theme = 'dark';
   const THEME_KEY = 'k-pond-theme';
   const systemLight = window.matchMedia('(prefers-color-scheme: light)');
   const themeBtn = document.getElementById('theme');
@@ -1373,12 +811,9 @@
   }
   function applyTheme(t) {
     theme = t;
-    activePal = t === 'light' ? paletteLight : palette;
     document.documentElement.dataset.theme = t;
-    if (themeMeta) themeMeta.content = BG[t];
-    themeBtn.textContent = t === 'light' ? 'day' : 'night';
-    themeBtn.title = `Switch to ${t === 'light' ? 'night (dark)' : 'day (light)'} mode`;
-    themeBtn.setAttribute('aria-label', themeBtn.title);
+    syncPageColour();
+    themeBtn.setAttribute('aria-label', t === 'light' ? 'Switch to night' : 'Switch to day');
   }
   applyTheme(storedTheme() || (systemLight.matches ? 'light' : 'dark'));
   systemLight.addEventListener('change', (e) => {
@@ -1394,8 +829,6 @@
     applyTheme(next);
   });
 
-  const hint = document.getElementById('hint');
-  setTimeout(() => hint.classList.add('dim'), 8000);
 
   let resizeTimer = 0;
   window.addEventListener('resize', () => {
@@ -1403,7 +836,44 @@
     resizeTimer = setTimeout(setup, 150);
   });
 
+  // style: which renderer draws the pond; remembered like the theme
+  const STYLE_KEY = 'k-pond-style';
+  const styleBtns = [...document.querySelectorAll('[data-style]')];
+  function syncPageColour() {
+    const bg = renderers[style].bg(theme);
+    document.documentElement.style.setProperty('--bg', bg);
+    if (themeMeta) themeMeta.content = bg;
+  }
+  function applyStyle(s) {
+    style = s;
+    for (const b of styleBtns) b.setAttribute('aria-pressed', String(b.dataset.style === s));
+    syncPageColour();
+  }
+  function setStyle(s) {
+    try {
+      localStorage.setItem(STYLE_KEY, s);
+    } catch {
+      /* private mode: the switch still works for this visit */
+    }
+    applyStyle(s);
+  }
+  try {
+    const s = localStorage.getItem(STYLE_KEY);
+    if (s === 'v1' || s === 'v2') style = s;
+  } catch {
+    /* no storage: start on v2 */
+  }
+  for (const b of styleBtns) b.addEventListener('click', () => setStyle(b.dataset.style));
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'v' && !e.metaKey && !e.ctrlKey && !e.altKey) setStyle(style === 'v1' ? 'v2' : 'v1');
+  });
+
+  function render() {
+    renderers[style].render(ctx, { W, H, S, time, theme, pads, frogs, ripples, fireflies, drops });
+  }
+
   // ---------------------------------------------------------------- loop
+  applyStyle(style);
   setup();
   let last = performance.now();
   function frame(now) {
