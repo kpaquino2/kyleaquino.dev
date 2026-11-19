@@ -77,7 +77,7 @@
     const p = {
       x, y, r,
       rot: rand(TAU),
-      vr: rand(-0.035, 0.035),
+      vr: rand(-0.015, 0.015),
       vx: rand(-3, 3) * S,
       vy: rand(-3, 3) * S,
       notch: 0,
@@ -131,7 +131,7 @@
       pad: null, lx: 0, ly: 0,
       inWater: false,
       state: 'sit', stateT: 0,
-      timer: rand(1, 7),
+      timer: rand(3, 22), // staggered so the first leaps don't come together
       squash: 1, ext: 0,
       croakT: 0, croak: 0,
       turnTo: null,
@@ -264,7 +264,7 @@
   function buildScene() {
     pads = []; frogs = []; ripples = []; fireflies = []; drops = [];
     const rMin = 34 * S, rMax = 118 * S;
-    const target = W * H * 0.34;
+    const target = W * H * 0.2; // leave plenty of open water
     let covered = 0;
     for (let n = 0; n < 1600 && covered < target; n++) {
       const r = max(rMin, rMax * (1 - (n / 1600) * 0.75) * rand(0.7, 1));
@@ -278,7 +278,7 @@
       pads.sort((a, b) => b.r - a.r).slice(0, 3).forEach((p) => { p.landable = true; });
     }
     const landable = pads.filter((p) => p.landable);
-    const nFrogs = clamp(round(landable.length * 0.5), 3, 14);
+    const nFrogs = clamp(round(landable.length * 0.45), 3, 8);
     for (let i = 0; i < nFrogs; i++) {
       const f = makeFrog();
       for (let t = 0; t < 30; t++) {
@@ -286,7 +286,7 @@
         if (s) { attach(f, s); frogs.push(f); break; }
       }
     }
-    const nFlies = clamp(round((W * H) / 160000), 3, 10);
+    const nFlies = clamp(round((W * H) / 320000), 2, 5);
     for (let i = 0; i < nFlies; i++) fireflies.push(makeFirefly());
   }
 
@@ -496,7 +496,7 @@
           f.tongue = { t: 0, fly: fl, x: fl.x, y: fl.y, caught: false };
         }
       }
-    } else if (f.tongueCD <= 0 && !f.tongue && random() < dt * 1.5) {
+    } else if (f.tongueCD <= 0 && !f.tongue && random() < dt * 0.6) {
       for (const fl of fireflies) {
         if (!fl.alive || fl.hunter || fl.fade < 0.6) continue;
         if (hypot(fl.x - f.x, fl.y - f.y) < f.size * 3.6) {
@@ -512,10 +512,10 @@
         const d = angDiff(f.heading, f.turnTo);
         turn(f, clamp(d, -dt * 2.2, dt * 2.2));
         if (abs(d) < 0.03) f.turnTo = null;
-      } else if (random() < dt * 0.07) {
+      } else if (random() < dt * 0.025) {
         f.turnTo = f.heading + rand(-1.1, 1.1);
       }
-      if (f.croakT <= 0 && random() < dt * 0.03) {
+      if (f.croakT <= 0 && random() < dt * 0.01) {
         f.croakT = CROAK_DUR;
         sfx.croak(f.x, f.pitch);
       }
@@ -573,7 +573,7 @@
         if (f.stateT > 0.22) {
           f.state = 'sit';
           f.squash = 1;
-          f.timer = rand(2, 8);
+          f.timer = rand(12, 30); // mostly still: a leap breaks the quiet now and then
         }
         break;
       case 'prep': {
@@ -632,9 +632,9 @@
 
   function updatePads(dt) {
     for (const p of pads) {
-      p.vx += rand(-1, 1) * S * dt * 3;
-      p.vy += rand(-1, 1) * S * dt * 3;
-      const sp = hypot(p.vx, p.vy), cap = 6 * S;
+      p.vx += rand(-1, 1) * S * dt * 1.5;
+      p.vy += rand(-1, 1) * S * dt * 1.5;
+      const sp = hypot(p.vx, p.vy), cap = 3.5 * S;
       if (sp > cap) { p.vx *= cap / sp; p.vy *= cap / sp; }
       const m = p.r * 0.2;
       if (p.x < -m) p.vx += 10 * S * dt;
@@ -725,7 +725,7 @@
     // water striders & falling seeds: the odd ripple on open water
     ambientT -= dt;
     if (ambientT <= 0) {
-      ambientT = rand(1.5, 4);
+      ambientT = rand(5, 10);
       for (let k = 0; k < 8; k++) {
         const x = rand(W), y = rand(H);
         if (padAt(x, y)) continue;

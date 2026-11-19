@@ -212,7 +212,7 @@ KPond.renderers.v1 = (() => {
 
   // ---------------------------------------------------------------- drawing
   function drawWater() {
-    const tw = REDUCED ? time * 0.25 : time;
+    const tw = time * (REDUCED ? 0.15 : 0.5);
     for (const r of ripples) {
       const age = time - r.t0;
       r.R = r.r0 + r.speed * age;
@@ -246,8 +246,8 @@ KPond.renderers.v1 = (() => {
           continue;
         }
         w += best * 0.6;
-        if (w > 0.62) {
-          const k = min(4, floor(((w - 0.62) / 0.38) * 5));
+        if (w > 0.7) {
+          const k = min(4, floor(((w - 0.7) / 0.3) * 5));
           set(i, WATER_CH[k], WATER[k]);
         } else {
           const hsh = perm[(c & 255) + perm[row & 255]];

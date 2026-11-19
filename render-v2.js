@@ -219,7 +219,7 @@ KPond.renderers.v2 = (() => {
   // Water: faint drifting texture, wakes, and ripples drawn as a ring of
   // strokes with a trailing ring of dots.
   function drawWater(T) {
-    const tw = REDUCED ? time * 0.25 : time;
+    const tw = time * (REDUCED ? 0.15 : 0.5);
     for (let k = 0; k <= 10; k++) WATER_A[k] = mixP(T.bg, T.water, k / 10);
     for (const r of ripples) {
       const age = time - r.t0;
@@ -270,10 +270,10 @@ KPond.renderers.v2 = (() => {
         }
         let w = sin(x * 0.009 + tw * 0.45 + sy1) + sin(y * 0.016 - tw * 0.38 + sin(x * 0.013 - tw * 0.22) * 1.3);
         w = (w * 0.25 + 0.5) * 0.65 + vnoise(x * 0.012 + tw * 0.08, y * 0.02 - tw * 0.05) * 0.35;
-        if (w > 0.74) {
+        if (w > 0.8) {
           glyph[i] = TILDE;
-          gcol[i] = WATER_A[w > 0.79 ? 2 : 1];
-        } else if (w > 0.66 && ((c + row) & 1) === 0) {
+          gcol[i] = WATER_A[w > 0.84 ? 2 : 1];
+        } else if (w > 0.73 && ((c + row) & 1) === 0) {
           glyph[i] = DOT;
           gcol[i] = WATER_A[1];
         } else if (perm[(c & 255) + perm[row & 255]] < 3) {
@@ -333,7 +333,7 @@ KPond.renderers.v2 = (() => {
           gc = inkP(full, T.ink * 0.8);
         } else {
           const k = floor(clamp((1 - h) * 5 + (vnoise(lx * 0.12 + p.seed * 2, ly * 0.12) - 0.5) * 2.4, 0, 5.99));
-          g = k >= 2 ? PAD_RAMP[k] : 0;
+          g = k >= 3 ? PAD_RAMP[k] : 0;
         }
         glyph[i] = g;
         gcol[i] = gc;
