@@ -24,7 +24,7 @@
 
   let W = 0, H = 0, dpr = 1;
   let S = 1, FR = 52, JMAX = 330;
-  let style = 'v2'; // which renderer is drawing: 'v1' or 'v2'
+  let style = 'v1'; // which renderer is drawing: 'v1' (default) or 'v2'
 
   // Text on the page (anything marked data-pond-avoid): pads drift away
   // from it and the renderers fade the pond out around it.
@@ -905,7 +905,7 @@
     const s = localStorage.getItem(STYLE_KEY);
     if (s === 'v1' || s === 'v2') style = s;
   } catch {
-    /* no storage: start on v2 */
+    /* no storage: start on v1 */
   }
   for (const b of styleBtns) b.addEventListener('click', () => setStyle(b.dataset.style));
   window.addEventListener('keydown', (e) => {
