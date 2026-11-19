@@ -50,7 +50,31 @@ window.KPond = (() => {
     return { x: p.x + lx * c - ly * s, y: p.y + lx * s + ly * c };
   }
 
+  // Per-cell fade around text blocks: 1 = full strength, down to `floor`
+  // inside a block, easing back over `reach` pixels.
+  function fadeField(cols, rows, cw, ch, rects, reach, floor = 0.08) {
+    const out = new Float32Array(cols * rows).fill(1);
+    for (const b of rects) {
+      const c0 = Math.max(0, Math.floor((b.left - reach) / cw)), c1 = Math.min(cols - 1, Math.floor((b.right + reach) / cw));
+      const r0 = Math.max(0, Math.floor((b.top - reach) / ch)), r1 = Math.min(rows - 1, Math.floor((b.bottom + reach) / ch));
+      for (let r = r0; r <= r1; r++) {
+        const cy = (r + 0.5) * ch;
+        const dy = Math.max(b.top - cy, 0, cy - b.bottom);
+        for (let c = c0; c <= c1; c++) {
+          const cx = (c + 0.5) * cw;
+          const d = Math.hypot(Math.max(b.left - cx, 0, cx - b.right), dy);
+          const t = clamp(d / reach, 0, 1);
+          const v = floor + (1 - floor) * t * t * (3 - 2 * t);
+          const i = r * cols + c;
+          if (v < out[i]) out[i] = v;
+        }
+      }
+    }
+    return out;
+  }
+
   return {
+    fadeField,
     TAU: PI * 2,
     LIGHT: -2.3, // light comes from the upper left
     REDUCED: window.matchMedia('(prefers-reduced-motion: reduce)').matches,

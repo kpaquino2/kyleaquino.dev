@@ -653,7 +653,25 @@ KPond.renderers.v2 = (() => {
         gcol[i] = sg;
       }
     }
+    applyFade(T);
     flush(T);
+  }
+
+  let fade = null, fadeKey = '', avoid = [], avoidVer = -1;
+  function applyFade(T) {
+    const key = `${avoidVer}:${cols}x${rows}`;
+    if (key !== fadeKey) {
+      fade = KPond.fadeField(cols, rows, cw, ch, avoid, 72);
+      fadeKey = key;
+    }
+    const n = cols * rows;
+    for (let i = 0; i < n; i++) {
+      const f = fade[i];
+      if (f >= 1) continue;
+      if (tile[i] >= 0) tile[i] = mixP(T.bg, tile[i], f);
+      if (glyph[i]) gcol[i] = mixP(T.bg, gcol[i], f);
+      if (f < 0.15) shade[i] = 0;
+    }
   }
 
   function resize(context, w, h) {
@@ -679,7 +697,7 @@ KPond.renderers.v2 = (() => {
 
   function render(context, world) {
     ctx = context;
-    ({ W, H, S, time, pads, frogs, ripples, fireflies, drops, theme } = world);
+    ({ W, H, S, time, pads, frogs, ripples, fireflies, drops, theme, avoid, avoidVer } = world);
     draw();
   }
 

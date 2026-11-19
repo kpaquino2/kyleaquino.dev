@@ -2,7 +2,7 @@
 
 # k-pond
 
-An ASCII pond at night: frogs hop between drifting lily pads, ripples spread across the water, and fireflies wander past (sometimes too close to a frog).
+Kyle Aquino's personal page: a name, a role, and Bashō's frog haiku, floating on an ASCII pond at night (or by day). Frogs hop between drifting lily pads, ripples spread across the water, and fireflies wander past, sometimes too close to a frog. The pond fades out around the text, and lily pads drift away from it, so the words stay readable.
 
 Open `index.html` in a browser. There's no build step and nothing to install.
 

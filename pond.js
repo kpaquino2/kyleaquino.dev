@@ -25,6 +25,42 @@
   let W = 0, H = 0, dpr = 1;
   let S = 1, FR = 52, JMAX = 330;
   let style = 'v2'; // which renderer is drawing: 'v1' or 'v2'
+
+  // Text on the page (anything marked data-pond-avoid): pads drift away
+  // from it and the renderers fade the pond out around it.
+  let avoid = [], avoidVer = 0;
+  function measureAvoid() {
+    avoid = [...document.querySelectorAll('[data-pond-avoid]')]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom }));
+    avoidVer++;
+  }
+  // distance from a point to the nearest text block, and the direction away from it
+  function awayFromText(x, y) {
+    let best = Infinity, ax = 0, ay = 0;
+    for (const b of avoid) {
+      const dx = x < b.left ? x - b.left : x > b.right ? x - b.right : 0;
+      const dy = y < b.top ? y - b.top : y > b.bottom ? y - b.bottom : 0;
+      let d = hypot(dx, dy);
+      let nx = dx, ny = dy;
+      if (d === 0) {
+        // inside the block: head for its nearest edge
+        const e = [x - b.left, b.right - x, y - b.top, b.bottom - y];
+        const k = e.indexOf(Math.min(...e));
+        nx = k === 0 ? -1 : k === 1 ? 1 : 0;
+        ny = k === 2 ? -1 : k === 3 ? 1 : 0;
+        d = -e[k];
+      }
+      if (d < best) {
+        best = d;
+        const l = hypot(nx, ny) || 1;
+        ax = nx / l;
+        ay = ny / l;
+      }
+    }
+    return { d: best, ax, ay };
+  }
   // wakes live in v2's grid; it keeps them fading even while v1 is showing
   const wake = (x, y, amt, radius) => renderers.v2.deposit(x, y, amt, radius);
 
@@ -234,6 +270,7 @@
       const r = max(rMin, rMax * (1 - (n / 1600) * 0.75) * rand(0.7, 1));
       const x = rand(-r * 0.3, W + r * 0.3), y = rand(-r * 0.3, H + r * 0.3);
       if (pads.some((p) => hypot(p.x - x, p.y - y) < (p.r + r) * 1.06 + 6 * S)) continue;
+      if (awayFromText(x, y).d < r * 0.9) continue;
       pads.push(makePad(x, y, r));
       covered += PI * r * r;
     }
@@ -265,6 +302,7 @@
 
     renderers.v1.resize(ctx, W, H);
     renderers.v2.resize(ctx, W, H);
+    measureAvoid();
 
     S = clamp(sqrt(W * H) / 1100, 0.6, 1.5);
     FR = 52 * S;
@@ -603,6 +641,12 @@
       if (p.x > W + m) p.vx -= 10 * S * dt;
       if (p.y < -m) p.vy += 10 * S * dt;
       if (p.y > H + m) p.vy -= 10 * S * dt;
+      const t = awayFromText(p.x, p.y), reach = p.r + 30 * S;
+      if (t.d < reach) {
+        const push = (1 - t.d / reach) * 26 * S * dt;
+        p.vx += t.ax * push;
+        p.vy += t.ay * push;
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.rot += p.vr * dt;
@@ -869,12 +913,14 @@
   });
 
   function render() {
-    renderers[style].render(ctx, { W, H, S, time, theme, pads, frogs, ripples, fireflies, drops });
+    renderers[style].render(ctx, { W, H, S, time, theme, pads, frogs, ripples, fireflies, drops, avoid, avoidVer });
   }
 
   // ---------------------------------------------------------------- loop
   applyStyle(style);
   setup();
+  // web fonts can shift the text a little once they arrive
+  if (document.fonts) document.fonts.ready.then(measureAvoid);
   let last = performance.now();
   function frame(now) {
     const dt = min(0.05, (now - last) / 1000);

@@ -544,6 +544,7 @@ KPond.renderers.v1 = (() => {
     for (const f of order) drawFrog(f);
     drawFireflies();
     drawDrops();
+    applyFade();
     flush();
   }
 
@@ -585,9 +586,25 @@ KPond.renderers.v1 = (() => {
     lineMax = [];
   }
 
+  // near text, glyphs drop out in an ordered-dither pattern
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+  let fade = null, fadeKey = '', avoid = [], avoidVer = -1;
+  function applyFade() {
+    const key = `${avoidVer}:${cols}x${rows}`;
+    if (key !== fadeKey) {
+      fade = KPond.fadeField(cols, rows, cellW, cellH, avoid, 64);
+      fadeKey = key;
+    }
+    for (let r = 0, i = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++, i++) {
+        if (fade[i] < 1 && BAYER[((r & 3) << 2) | (c & 3)] > fade[i]) chars[i] = SPACE;
+      }
+    }
+  }
+
   function render(context, world) {
     ctx = context;
-    ({ W, H, S, time, pads, frogs, ripples, fireflies, drops, theme } = world);
+    ({ W, H, S, time, pads, frogs, ripples, fireflies, drops, theme, avoid, avoidVer } = world);
     activePal = theme === 'light' ? paletteLight : palette;
     draw();
   }
